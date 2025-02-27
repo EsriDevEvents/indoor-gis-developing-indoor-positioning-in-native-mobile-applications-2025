@@ -1,5 +1,5 @@
 //
-// COPYRIGHT 2023 ESRI
+// COPYRIGHT 2025 ESRI
 //
 // TRADE SECRETS: ESRI PROPRIETARY AND CONFIDENTIAL
 // Unpublished material - all rights reserved under the
@@ -331,7 +331,7 @@ struct ContentView: View, ArcGISAuthenticationChallengeHandler {
                 return "Invalid token"
                 
             case .oAuthAuthorizationFailure(type: let type, details: let description):
-                return "OAuthe authorization failed. Type: \(type), Description: \(description)"
+                return "OAuth authorization failed. Type: \(type), Description: \(description)"
                 
             case .sslRequired:
                 return "SSL required"
@@ -343,7 +343,7 @@ struct ContentView: View, ArcGISAuthenticationChallengeHandler {
                 return "Token required"
                 
             case .unableToDetermineTokenURL:
-                return "Unabler to determin token URL"
+                return "Unable to determine token URL"
                 
             @unknown default:
                 return "Unknown error"
