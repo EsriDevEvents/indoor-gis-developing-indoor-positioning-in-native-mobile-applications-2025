@@ -1,5 +1,5 @@
 //
-// COPYRIGHT 2023 ESRI
+// COPYRIGHT 2025 ESRI
 //
 // TRADE SECRETS: ESRI PROPRIETARY AND CONFIDENTIAL
 // Unpublished material - all rights reserved under the
@@ -24,12 +24,12 @@ import OSLog
 let logger = os.Logger(subsystem: "com.esri.IPSExample", category: "ilds")
 
 struct ContentView: View, ArcGISAuthenticationChallengeHandler {
-    private struct LoadedILDS {
+    private struct LoadedMap {
         let mapView: MapView
         let ilds: IndoorsLocationDataSource
     }
     
-    @State private var loadILDSResult: Result<LoadedILDS, Error>?
+    @State private var loadMapResult: Result<LoadedMap, Error>?
     @State private var ildsStatus = IndoorsLocationDataSource.Status.stopped
     
     @State private var info: String = ""
@@ -43,20 +43,20 @@ struct ContentView: View, ArcGISAuthenticationChallengeHandler {
     var body: some View {
         Group {
             ZStack {
-                /// Map view
-                if let loadILDSResult = loadILDSResult {
+                // Map view
+                if let loadILDSResult = loadMapResult {
                     switch loadILDSResult {
                     case let .success(loadedILDS):
                         loadedILDS.mapView
                     case let .failure(error):
-                        Text("Error loading map: \(errorString(for: error))")
+                        Text("Error: \(errorString(for: error))")
                             .padding()
                     }
                 } else {
                     ProgressView()
                 }
                 
-                /// Location information view
+                // Location information view
                 Text(info)
                     .font(.title3)
                     .background(.gray)
@@ -64,47 +64,32 @@ struct ContentView: View, ArcGISAuthenticationChallengeHandler {
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     .padding(EdgeInsets(top: 10, leading: 10, bottom: 0, trailing: 10))
                 
-                /// Start-Stop Button
-                if let mapLoadResult = loadILDSResult {
+                // Start-Stop Button
+                if let loadMapResult = loadMapResult {
                     Button(action: {
-                        switch mapLoadResult {
+                        switch loadMapResult {
                         case .failure:
                             Task {
-                                await loadILDS()
+                                await loadMap()
                             }
                             
                         case let .success(loadedMap):
                             switch loadedMap.ilds.status {
                             case .starting, .started:
                                 Task {
-                                    await loadedMap.ilds.stop()
-                                    
-                                    locationTask?.cancel()
-                                    locationTask = nil
-                                    
-                                    statusTask?.cancel()
-                                    statusTask = nil
-                                    
-                                    errorTask?.cancel()
-                                    errorTask = nil
-                                    
-                                    warningTask?.cancel()
-                                    warningTask = nil
-                                    
-                                    messageTask?.cancel()
-                                    messageTask = nil
+                                    await stopILDS(loadedMap.ilds)
                                 }
                                 
                             case .failedToStart, .stopped, .stopping:
                                 Task {
-                                    await start(loadedMap: loadedMap)
+                                    await startILDS(loadedMap.ilds)
                                 }
                             @unknown default:
                                 break
                             }
                         }
                     }) {
-                        switch mapLoadResult {
+                        switch loadMapResult {
                         case .failure:
                             return Text("start")
                             
@@ -129,11 +114,11 @@ struct ContentView: View, ArcGISAuthenticationChallengeHandler {
                 }
             }
         }.task {
-            let loadedMap = await loadILDS()
+            let loadedMap = await loadMap()
             
             // If the map loads successfully, immediately start ILDS.
             if let loadedMap = loadedMap {
-                await start(loadedMap: loadedMap)
+                await startILDS(loadedMap.ilds)
             }
         }.onAppear {
             ArcGISEnvironment.authenticationManager.arcGISAuthenticationChallengeHandler = self
@@ -144,16 +129,20 @@ struct ContentView: View, ArcGISAuthenticationChallengeHandler {
         }
     }
     
-    private func loadILDS() async -> LoadedILDS? {
+    private enum LoadMapError: Error {
+        case indoorPositioningDefinitionNotFound
+    }
+    
+    private func loadMap() async -> LoadedMap? {
         do {
-            let portal = Portal(url: URL(string: "https://viennardc.maps.arcgis.com")!)
-            try await portal.load()
+            // Load map from portal
+//            let map = try await loadMapFromPortal()
             
-            let map = Map(item: PortalItem(portal: portal, id: Item.ID(rawValue: "a4ab11d9eca94692acff9580ae47a9dc")!))
-            try await map.load()
+            // Load map from MMPK
+            let map = try await loadMobileMapPackage()
             
             guard let indoorPositioningDefinition = map.indoorPositioningDefinition else {
-                loadILDSResult = .failure(SetupError.indoorPositioningDefinitionNotFound)
+                loadMapResult = .failure(LoadMapError.indoorPositioningDefinitionNotFound)
                 return nil
             }
             
@@ -183,37 +172,53 @@ struct ContentView: View, ArcGISAuthenticationChallengeHandler {
             // Enable streamed message updates
             ilds.configuration.infoMessagesAreEnabled = true
             
-            /// Assign ILDS to the map's location display
+            // Assign ILDS to the map's location display
             let locationDisplay = LocationDisplay(dataSource: ilds)
             let mapView = MapView(map: map).locationDisplay(locationDisplay)
             
-            let loadedMap = LoadedILDS(mapView: mapView, ilds: ilds)
-            loadILDSResult = .success(loadedMap)
+            let loadedMap = LoadedMap(mapView: mapView, ilds: ilds)
+            loadMapResult = .success(loadedMap)
             
             return loadedMap
         } catch let error {
-            loadILDSResult = .failure(error)
+            loadMapResult = .failure(error)
             
             return nil
         }
     }
     
-    private func start(loadedMap: LoadedILDS) async {
+    private func loadMapFromPortal() async throws -> Map {
+        let portal = Portal(url: URL(string: "https://viennardc.maps.arcgis.com")!)
+        try await portal.load()
+        
+        let map = Map(item: PortalItem(portal: portal, id: Item.ID(rawValue: "a4ab11d9eca94692acff9580ae47a9dc")!))
+        try await map.load()
+        
+        return map
+    }
+    
+    private func loadMobileMapPackage() async throws -> Map {
+        let url = Bundle.main.url(forResource: "Esri Vienna R_D Bluetooth deployment", withExtension: "mmpk")!
+        let mobileMapPackage = MobileMapPackage(fileURL: url)
+        try await mobileMapPackage.load()
+        
+        return mobileMapPackage.maps.first!
+    }
+    
+    private func startILDS(_ ilds: IndoorsLocationDataSource) async {
         do {
-            let ilds = loadedMap.ilds
-            
             try await ilds.start()
             
             locationTask = Task {
-                /// Subscribe to the locations stream
+                // Subscribe to the locations stream
                 for await location in ilds.locations {
-                    /// Show updated location information
-                    self.info = parseDetailedLocationInformation(location)
+                    // Show updated location information
+                    info = parseDetailedLocationInformation(location)
                 }
             }
             
             statusTask = Task {
-                /// Subscribe to the streamed status updates
+                // Subscribe to the streamed status updates
                 for await status in ilds.$status {
                     ildsStatus = status
                     
@@ -230,7 +235,7 @@ struct ContentView: View, ArcGISAuthenticationChallengeHandler {
                         logger.info("[status] stopped")
                         
                         // Handle UI state
-                        self.info = ""
+                        info = ""
                     @unknown default:
                         break
                     }
@@ -238,7 +243,7 @@ struct ContentView: View, ArcGISAuthenticationChallengeHandler {
             }
             
             errorTask = Task {
-                /// Subscribe to the streamed error updates
+                // Subscribe to the streamed error updates
                 for await error in ilds.$error {
                     if let error = error {
                         logger.error("[error] \(error.localizedDescription)")
@@ -247,7 +252,7 @@ struct ContentView: View, ArcGISAuthenticationChallengeHandler {
             }
             
             warningTask = Task {
-                /// Subscribe to the streamed warning updates
+                // Subscribe to the streamed warning updates
                 for await warning in ilds.$warning {
                     if let warning = warning {
                         if let arcGISError = warning as? ArcGISError {
@@ -260,20 +265,39 @@ struct ContentView: View, ArcGISAuthenticationChallengeHandler {
             }
             
             messageTask = Task {
-                /// Subscribe to the streamed message updates
+                // Subscribe to the streamed message updates
                 for await message in ilds.messages {
                     logger.info("[message] \(message.timestamp), \(message.message)")
                 }
             }
         } catch let error {
-            loadILDSResult = .failure(error)
+            loadMapResult = .failure(error)
         }
+    }
+    
+    private func stopILDS(_ ilds: IndoorsLocationDataSource) async {
+        await ilds.stop()
+        
+        locationTask?.cancel()
+        locationTask = nil
+        
+        statusTask?.cancel()
+        statusTask = nil
+        
+        errorTask?.cancel()
+        errorTask = nil
+        
+        warningTask?.cancel()
+        warningTask = nil
+        
+        messageTask?.cancel()
+        messageTask = nil
     }
     
     private func parseDetailedLocationInformation(_ location: Location) -> String {
         var info = ""
         
-        /// Parse new location details from additionslSourceProperties
+        // Parse new location details from additionslSourceProperties
         let positionSource = location.additionalSourceProperties[.positionSource] as! String
         info += "Source: \(positionSource)"
         
@@ -286,7 +310,7 @@ struct ContentView: View, ArcGISAuthenticationChallengeHandler {
         
         if positionSource == "GNSS", let satteliteCount = location.additionalSourceProperties[.satelliteCount] {
             info += "\nSatellites: \(satteliteCount)"
-        } else if let transmitterCount = location.additionalSourceProperties[Location.SourcePropertyKey(rawValue: "transmitterCount")] {
+        } else if let transmitterCount = location.additionalSourceProperties[.transmitterCount] {
             info += "\nTransmitters: \(transmitterCount)"
         }
         
@@ -300,20 +324,8 @@ struct ContentView: View, ArcGISAuthenticationChallengeHandler {
         return info
     }
     
-    private enum SetupError: LocalizedError {
-        case indoorPositioningDefinitionNotFound
-
-        var errorDescription: String? {
-            switch self {
-            case .indoorPositioningDefinitionNotFound:
-                return "PositioningDefinition not found"
-            }
-        }
-    }
-    
     private func errorString(for error: Error) -> String {
-        switch error {
-        case let authenticationError as ArcGISAuthenticationError:
+        if let authenticationError = error as? ArcGISAuthenticationError {
             switch authenticationError {
             case .credentialCannotBeShared:
                 return "Credential cannot be shared"
@@ -331,7 +343,7 @@ struct ContentView: View, ArcGISAuthenticationChallengeHandler {
                 return "Invalid token"
                 
             case .oAuthAuthorizationFailure(type: let type, details: let description):
-                return "OAuthe authorization failed. Type: \(type), Description: \(description)"
+                return "OAuth authorization failed. Type: \(type), Description: \(description)"
                 
             case .sslRequired:
                 return "SSL required"
@@ -343,15 +355,25 @@ struct ContentView: View, ArcGISAuthenticationChallengeHandler {
                 return "Token required"
                 
             case .unableToDetermineTokenURL:
-                return "Unabler to determin token URL"
+                return "Unable to determine token URL"
                 
             @unknown default:
                 return "Unknown error"
             }
-            
-        default:
-            return "Unknown error"
         }
+        
+        if let arcGISError = error as? ArcGISError {
+            return arcGISError.details
+        }
+        
+        if let loadMapError = error as? LoadMapError {
+            switch loadMapError {
+            case .indoorPositioningDefinitionNotFound:
+                return "PositiioningDefinition not found"
+            }
+        }
+        
+        return error.localizedDescription
     }
     
     func handleArcGISAuthenticationChallenge(_ challenge: ArcGISAuthenticationChallenge) async throws -> ArcGISAuthenticationChallenge.Disposition {
