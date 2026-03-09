@@ -53,7 +53,7 @@ class MainViewModel : ViewModel() {
                         }
                 }
                 .onFailure {
-                    Log.d("MainViewModel", "Error: ${(it as? ArcGISException)?.additionalMessage}")
+                    Log.d("MainViewModel", "Error: ${(it as? ArcGISException)?.localizedMessage}")
                     presentError(R.string.error_portal_loading)
                 }
         }
@@ -148,7 +148,7 @@ class MainViewModel : ViewModel() {
 
                 LocationDataSourceStatus.Stopped -> {
                     val error = indoorsLocationDataSource.error.value as? ArcGISException
-                    Log.d("MainViewModel", "error: ${error?.additionalMessage}")
+                    Log.d("MainViewModel", "error: ${error?.localizedMessage}")
                     handleILDSStatusUpdate(
                         MapState.ILDS_STOPPED, if (error != null) {
                             R.string.error_ilds_stopped
